@@ -1,21 +1,21 @@
 import express from "express";
 import fetch from "node-fetch";
+import fs from "fs";
 
 const app = express();
 app.use(express.json());
 
-// ========== CONFIG ==========
-const GITHUB_USER = "hhkiguuu";          // Your GitHub username
-const REPO = "cwuv-private";            // Your private Lua repo
-const FILE_PATH = "source.lua";         // File inside repo
-const GITHUB_TOKEN = "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"; // Server-side only
+// ===== CONFIG =====
+const GITHUB_USER = "hhkiguuu";
+const REPO = "cwuv-private";
+const FILE_PATH = "source.lua";
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN; // server env
+const DISCORD_WEBHOOK = process.env.DISCORD_WEBHOOK; // server env
+const SECRET = "CWUV_SECRET_123";
+const VALID_KEYS = ["CWUV-KEY-1"];
+const KILL_SWITCH_FILE = "./killflag.json"; // store kill switch flag
 
-const DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1469727812284842159/wBC9pTZcTKczrCmyWQmpFU-_LAfAlTts4lJHaPcoIlMUkIDATta6s9PsvadZ2ICTj1JL"; // Server-side logging
-const VALID_KEYS = ["CWUV-KEY-1"];      // Loader keys
-const SECRET = "CWUV_SECRET_123";       // Encryption secret (matches loader)
-// ============================
-
-// XOR + base64 encryption
+// ===== Helpers =====
 function encrypt(text) {
   let out = "";
   for (let i = 0; i < text.length; i++) {
@@ -26,12 +26,22 @@ function encrypt(text) {
   return Buffer.from(out).toString("base64");
 }
 
+// Initialize kill flag if not exist
+if (!fs.existsSync(KILL_SWITCH_FILE)) {
+  fs.writeFileSync(KILL_SWITCH_FILE, JSON.stringify({ active: false }));
+}
+
+// ===== Routes =====
+
+// Loader requests code
 app.post("/load", async (req, res) => {
   const { key, hwid } = req.body;
 
-  if (!VALID_KEYS.includes(key)) {
-    return res.status(403).send("Denied");
-  }
+  if (!VALID_KEYS.includes(key)) return res.status(403).send("Denied");
+
+  // Check kill switch
+  const killData = JSON.parse(fs.readFileSync(KILL_SWITCH_FILE, "utf8"));
+  if (killData.active) return res.send("KILL");
 
   try {
     // Fetch private Lua source from GitHub
@@ -44,13 +54,12 @@ app.post("/load", async (req, res) => {
         }
       }
     );
-
     if (!ghRes.ok) return res.status(500).send("Failed to fetch source");
 
     const code = await ghRes.text();
     const encrypted = encrypt(code);
 
-    // Discord logging
+    // Discord log
     fetch(DISCORD_WEBHOOK, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -76,6 +85,16 @@ app.post("/load", async (req, res) => {
   }
 });
 
+// Bot endpoint to toggle kill switch
+app.post("/kill", (req, res) => {
+  const { action, secret } = req.body;
+
+  if (secret !== SECRET) return res.status(403).send("Forbidden");
+  const active = action === "on";
+  fs.writeFileSync(KILL_SWITCH_FILE, JSON.stringify({ active }));
+  res.send({ status: active ? "KILL ACTIVE" : "KILL OFF" });
+});
+
 app.listen(3000, () => {
-  console.log("CWUV Proxy running (private repo + encrypted)");
+  console.log("CWUV Proxy running with Kill Switch");
 });
